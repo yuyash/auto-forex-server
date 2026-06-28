@@ -30,7 +30,7 @@ from auto_forex_server.tasks.runner import (
 )
 from auto_forex_server.tasks.types import Task
 
-RunnerKind = Literal["backtest", "trading"]
+RunnerType = Literal["backtest", "trading"]
 
 
 class TaskAlreadyRunningError(RuntimeError):
@@ -41,7 +41,7 @@ class TaskAlreadyRunningError(RuntimeError):
 class TaskRuntime:
     """Runtime dependencies and state for a managed task."""
 
-    kind: RunnerKind
+    type: RunnerType
     data_source: DataSource
     strategy: Strategy
     control: TaskExecutionControl
@@ -74,7 +74,7 @@ class TaskManager:
         """Start a backtest task in the background."""
         started = ExecutableTask.from_definition(definition).start()
         self.repository.save(started)
-        self._launch(started, kind="backtest", data_source=data_source, strategy=strategy)
+        self._launch(started, type="backtest", data_source=data_source, strategy=strategy)
         return started
 
     def start_trading(
@@ -87,7 +87,7 @@ class TaskManager:
         """Start a trading task in the background."""
         started = ExecutableTask.from_definition(definition).start()
         self.repository.save(started)
-        self._launch(started, kind="trading", data_source=data_source, strategy=strategy)
+        self._launch(started, type="trading", data_source=data_source, strategy=strategy)
         return started
 
     def get(self, task_id: UUID) -> Task:
@@ -126,7 +126,7 @@ class TaskManager:
         restarted = self.repository.save(self.repository.get(task_id).restart())
         self._launch(
             restarted,
-            kind=runtime.kind,
+            type=runtime.type,
             data_source=runtime.data_source,
             strategy=runtime.strategy,
         )
@@ -151,7 +151,7 @@ class TaskManager:
         self,
         task: Task,
         *,
-        kind: RunnerKind,
+        type: RunnerType,
         data_source: DataSource,
         strategy: Strategy,
     ) -> None:
@@ -166,13 +166,13 @@ class TaskManager:
             control = TaskExecutionControl()
             runner = self._runner(
                 task,
-                kind=kind,
+                type=type,
                 data_source=data_source,
                 strategy=strategy,
             )
             future = self._executor.submit(runner.run, control)
             self._runtimes[task.id] = TaskRuntime(
-                kind=kind,
+                type=type,
                 data_source=data_source,
                 strategy=strategy,
                 control=control,
@@ -183,11 +183,11 @@ class TaskManager:
         self,
         task: Task,
         *,
-        kind: RunnerKind,
+        type: RunnerType,
         data_source: DataSource,
         strategy: Strategy,
     ) -> BacktestRunner | TradingRunner:
-        if kind == "backtest":
+        if type == "backtest":
             if not isinstance(task.definition, BacktestTaskDefinition):
                 msg = "backtest runner requires BacktestTaskDefinition"
                 raise TypeError(msg)

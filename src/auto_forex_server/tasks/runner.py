@@ -86,7 +86,7 @@ class TaskRunner(ABC):
             task_id=task.id,
             task_type=task.task_type,
             instrument=task.instrument,
-            metadata=Metadata.of(strategy_name=task.strategy_name),
+            metadata=Metadata.of(strategy_name=self.strategy.name),
         )
 
     def _publish_strategy_result(self, result: StrategyResult) -> None:

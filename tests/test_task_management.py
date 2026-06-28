@@ -24,7 +24,6 @@ from core import (
     StrategyDecisionCode,
     StrategyDecisionReason,
     StrategyEvent,
-    StrategyReference,
     StrategyResult,
     TaskStatus,
     Tick,
@@ -50,7 +49,7 @@ class MemoryDataSource(DataSource):
         self._repeat = repeat
         self._delay_seconds = delay_seconds
 
-    def ticks(
+    def _raw_ticks(
         self,
         *,
         instrument: CurrencyPair,
@@ -143,7 +142,6 @@ def test_backtest_manager_runs_ticks_and_handles_broker_events() -> None:
     )
     definition = BacktestTaskDefinition(
         name="Backtest USD_JPY",
-        strategy=StrategyReference.of("opening"),
         instrument=USD_JPY,
         start_at=datetime(2026, 1, 1, tzinfo=UTC),
         end_at=datetime(2026, 1, 2, tzinfo=UTC),
@@ -180,7 +178,6 @@ def test_backtest_manager_restarts_completed_task() -> None:
     )
     definition = BacktestTaskDefinition(
         name="Backtest USD_JPY",
-        strategy=StrategyReference.of("hold"),
         instrument=USD_JPY,
         start_at=datetime(2026, 1, 1, tzinfo=UTC),
         end_at=datetime(2026, 1, 2, tzinfo=UTC),
@@ -215,7 +212,6 @@ def test_trading_manager_stops_running_task() -> None:
     )
     definition = TradingTaskDefinition(
         name="Trading USD_JPY",
-        strategy=StrategyReference.of("hold"),
         instrument=USD_JPY,
         dry_run=True,
     )
