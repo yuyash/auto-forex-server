@@ -155,7 +155,6 @@ def test_backtest_manager_runs_ticks_and_handles_broker_events() -> None:
         data_source=MemoryDataSource([tick]),
         strategy=OpeningStrategy(
             name="opening",
-            instrument=USD_JPY,
         ),
     )
     finished = manager.wait(started.id, timeout=2)
@@ -189,7 +188,6 @@ def test_backtest_manager_restarts_completed_task() -> None:
         data_source=MemoryDataSource([tick]),
         strategy=HoldStrategy(
             name="hold",
-            instrument=USD_JPY,
         ),
     )
     first_finished = manager.wait(started.id, timeout=2)
@@ -222,7 +220,6 @@ def test_trading_manager_stops_running_task() -> None:
         data_source=MemoryDataSource([tick], repeat=True, delay_seconds=0.01),
         strategy=HoldStrategy(
             name="hold",
-            instrument=USD_JPY,
         ),
     )
     sleep(0.03)
