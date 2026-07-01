@@ -13,11 +13,11 @@ from core import (
     DataSource,
     EventType,
     Money,
-    OrderRequest,
-    OrderResult,
+    Order,
     OrderSide,
     OrderStatus,
     Position,
+    PositionSide,
     Strategy,
     StrategyAction,
     StrategyContext,
@@ -98,34 +98,34 @@ class HoldStrategy(Strategy):
 
 class MemoryBroker(Broker):
     def __init__(self) -> None:
-        self.orders: list[OrderRequest] = []
+        self.orders: list[Order] = []
 
-    def place_order(self, request: OrderRequest) -> OrderResult:
-        self.orders.append(request)
-        return OrderResult(
+    def place_order(self, order: Order) -> Order:
+        self.orders.append(order)
+        return order.evolve(
             status=OrderStatus.FILLED,
             broker_order_id=BrokerOrderId.of("order-1"),
-            instrument=request.instrument,
-            side=request.side,
-            requested_units=request.units,
-            filled_units=request.units,
-            average_fill_price=request.price,
+            filled_units=order.units,
+            average_fill_price=order.price,
         )
 
     def close_position(
         self,
         *,
         position: Position,
+        side: PositionSide,
         units: Decimal | None = None,
-    ) -> OrderResult:
-        return OrderResult(
+    ) -> Order:
+        state = position.require_side(side)
+        amount = units or state.units
+        return Order(
             status=OrderStatus.FILLED,
             broker_order_id=BrokerOrderId.of("close-order-1"),
             instrument=position.instrument,
-            side=OrderSide.SELL,
-            requested_units=units or position.units,
-            filled_units=units or position.units,
-            average_fill_price=position.average_entry_price,
+            side=OrderSide.SELL if side == PositionSide.LONG else OrderSide.BUY,
+            units=amount,
+            filled_units=amount,
+            average_fill_price=state.average_entry_price,
         )
 
     def positions(self, *, instrument: CurrencyPair | None = None) -> Sequence[Position]:
@@ -164,7 +164,7 @@ def test_backtest_manager_runs_ticks_and_handles_broker_events() -> None:
     assert finished.status == TaskStatus.COMPLETED
     assert finished.run_count == 1
     assert broker.orders[0].side == OrderSide.BUY
-    assert broker.orders[0].request_id.value.version == 7
+    assert broker.orders[0].id.value.version == 7
     assert any(event.type == EventType.TASK_COMPLETED for event in event_bus.history)
 
 

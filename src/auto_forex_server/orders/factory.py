@@ -1,4 +1,4 @@
-"""Factories for broker-neutral order requests."""
+"""Factories for broker-neutral orders."""
 
 from __future__ import annotations
 
@@ -6,27 +6,25 @@ from decimal import Decimal
 
 from core import (
     Metadata,
-    OrderRequest,
-    OrderRequestId,
+    Order,
     OrderSide,
     StrategyEvent,
     TradeSide,
 )
 
 
-class OrderRequestFactory:
-    """Create order requests at the Server orchestration boundary."""
+class OrderFactory:
+    """Create orders at the Server orchestration boundary."""
 
-    def open_position_request(
+    def open_position_order(
         self,
         *,
         event: StrategyEvent,
         side: TradeSide,
         units: Decimal,
-    ) -> OrderRequest:
-        """Create a broker-neutral request for an open-position strategy event."""
-        return OrderRequest(
-            request_id=OrderRequestId.new(),
+    ) -> Order:
+        """Create a broker-neutral order for an open-position strategy event."""
+        return Order(
             instrument=event.instrument,
             side=self._order_side(side),
             units=units,

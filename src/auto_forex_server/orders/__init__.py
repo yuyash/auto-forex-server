@@ -1,5 +1,5 @@
-"""Order request creation utilities."""
+"""Order creation utilities."""
 
-from auto_forex_server.orders.factory import OrderRequestFactory
+from auto_forex_server.orders.factory import OrderFactory
 
-__all__ = ["OrderRequestFactory"]
+__all__ = ["OrderFactory"]
