@@ -10,24 +10,24 @@ from uuid import UUID
 
 from core import (
     BacktestTaskDefinition,
+    Clock,
     DataSource,
     Event,
     EventSource,
     EventType,
     ExecutableTask,
+    ManualClock,
     Metadata,
     Strategy,
+    SystemClock,
+    TaskAction,
+    TaskStatus,
     TradingTaskDefinition,
 )
 
-from auto_forex_server.events.bus import EventBus
+from auto_forex_server.events import EventBus
 from auto_forex_server.tasks.repository import InMemoryTaskRepository, TaskRepository
-from auto_forex_server.tasks.runner import (
-    BacktestRunner,
-    TaskExecutionControl,
-    TradingRunner,
-    is_active_status,
-)
+from auto_forex_server.tasks.runner import BacktestRunner, TaskExecutionControl, TradingRunner
 from auto_forex_server.tasks.types import Task
 
 RunnerType = Literal["backtest", "trading"]
@@ -44,6 +44,7 @@ class TaskRuntime:
     type: RunnerType
     data_source: DataSource
     strategy: Strategy
+    clock: Clock
     control: TaskExecutionControl
     future: Future[Task]
 
@@ -72,9 +73,16 @@ class TaskManager:
         strategy: Strategy,
     ) -> ExecutableTask:
         """Start a backtest task in the background."""
-        started = ExecutableTask.from_definition(definition).start()
+        clock = ManualClock(definition.start_at)
+        started = ExecutableTask.from_definition(definition, clock=clock).start(clock=clock)
         self.repository.save(started)
-        self._launch(started, type="backtest", data_source=data_source, strategy=strategy)
+        self._launch(
+            started,
+            type="backtest",
+            data_source=data_source,
+            strategy=strategy,
+            clock=clock,
+        )
         return started
 
     def start_trading(
@@ -85,9 +93,16 @@ class TaskManager:
         strategy: Strategy,
     ) -> ExecutableTask:
         """Start a trading task in the background."""
-        started = ExecutableTask.from_definition(definition).start()
+        clock = SystemClock()
+        started = ExecutableTask.from_definition(definition, clock=clock).start(clock=clock)
         self.repository.save(started)
-        self._launch(started, type="trading", data_source=data_source, strategy=strategy)
+        self._launch(
+            started,
+            type="trading",
+            data_source=data_source,
+            strategy=strategy,
+            clock=clock,
+        )
         return started
 
     def get(self, task_id: UUID) -> Task:
@@ -99,9 +114,9 @@ class TaskManager:
         runtime = self._runtime(task_id)
         runtime.control.request_pause()
         task = self.repository.get(task_id)
-        if task.can("pause"):
-            paused = self.repository.save(task.pause())
-            self._publish_task_event(EventType.TASK_PAUSED, paused)
+        if task.can(TaskAction.PAUSE):
+            paused = self.repository.save(task.pause(clock=runtime.clock))
+            self._publish_task_event(EventType.TASK_PAUSED, paused, clock=runtime.clock)
             return paused
         return task
 
@@ -110,9 +125,9 @@ class TaskManager:
         runtime = self._runtime(task_id)
         runtime.control.request_stop()
         task = self.repository.get(task_id)
-        if task.can("stop"):
-            stopped = self.repository.save(task.stop())
-            self._publish_task_event(EventType.TASK_STOPPED, stopped)
+        if task.can(TaskAction.STOP):
+            stopped = self.repository.save(task.stop(clock=runtime.clock))
+            self._publish_task_event(EventType.TASK_STOPPED, stopped, clock=runtime.clock)
             return stopped
         return task
 
@@ -123,12 +138,15 @@ class TaskManager:
             runtime.control.request_stop()
             runtime.future.result(timeout=timeout)
 
-        restarted = self.repository.save(self.repository.get(task_id).restart())
+        current_task = self.repository.get(task_id)
+        clock = self._clock_for_task(current_task, runtime.type)
+        restarted = self.repository.save(current_task.restart(clock=clock))
         self._launch(
             restarted,
             type=runtime.type,
             data_source=runtime.data_source,
             strategy=runtime.strategy,
+            clock=clock,
         )
         return restarted
 
@@ -154,12 +172,13 @@ class TaskManager:
         type: RunnerType,
         data_source: DataSource,
         strategy: Strategy,
+        clock: Clock,
     ) -> None:
         with self._lock:
             current = self._runtimes.get(task.id)
             if current is not None and not current.future.done():
                 current_task = self.repository.get(task.id)
-                if is_active_status(current_task.status):
+                if self._is_active_task(current_task):
                     msg = f"task already has an active runner: {task.id}"
                     raise TaskAlreadyRunningError(msg)
 
@@ -169,12 +188,14 @@ class TaskManager:
                 type=type,
                 data_source=data_source,
                 strategy=strategy,
+                clock=clock,
             )
             future = self._executor.submit(runner.run, control)
             self._runtimes[task.id] = TaskRuntime(
                 type=type,
                 data_source=data_source,
                 strategy=strategy,
+                clock=clock,
                 control=control,
                 future=future,
             )
@@ -186,6 +207,7 @@ class TaskManager:
         type: RunnerType,
         data_source: DataSource,
         strategy: Strategy,
+        clock: Clock,
     ) -> BacktestRunner | TradingRunner:
         if type == "backtest":
             if not isinstance(task.definition, BacktestTaskDefinition):
@@ -197,6 +219,7 @@ class TaskManager:
                 strategy=strategy,
                 event_bus=self.event_bus,
                 repository=self.repository,
+                clock=clock,
             )
 
         if not isinstance(task.definition, TradingTaskDefinition):
@@ -208,16 +231,36 @@ class TaskManager:
             strategy=strategy,
             event_bus=self.event_bus,
             repository=self.repository,
+            clock=clock,
         )
 
     def _runtime(self, task_id: UUID) -> TaskRuntime:
         with self._lock:
             return self._runtimes[task_id]
 
-    def _publish_task_event(self, event_type: EventType, task: Task) -> None:
+    def _clock_for_task(self, task: Task, type: RunnerType) -> Clock:
+        if type == "backtest":
+            if not isinstance(task.definition, BacktestTaskDefinition):
+                msg = "backtest clock requires BacktestTaskDefinition"
+                raise TypeError(msg)
+            return ManualClock(task.definition.start_at)
+        return SystemClock()
+
+    @staticmethod
+    def _is_active_task(task: Task) -> bool:
+        return task.status in {TaskStatus.STARTING, TaskStatus.RUNNING, TaskStatus.PAUSED}
+
+    def _publish_task_event(
+        self,
+        event_type: EventType,
+        task: Task,
+        *,
+        clock: Clock,
+    ) -> None:
         self.event_bus.publish(
             Event(
                 type=event_type,
+                timestamp=clock.now(),
                 task_id=task.id,
                 source=EventSource.SERVER,
                 metadata=Metadata.of(

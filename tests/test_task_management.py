@@ -133,99 +133,110 @@ class MemoryBroker(Broker):
         return ()
 
 
-def test_backtest_manager_runs_ticks_and_handles_broker_events() -> None:
-    tick = Tick(
-        instrument=USD_JPY,
-        timestamp=datetime(2026, 1, 1, tzinfo=UTC),
-        bid=Money.of("150.10", "JPY"),
-        ask=Money.of("150.12", "JPY"),
-    )
-    definition = BacktestTaskDefinition(
-        name="Backtest USD_JPY",
-        instrument=USD_JPY,
-        start_at=datetime(2026, 1, 1, tzinfo=UTC),
-        end_at=datetime(2026, 1, 2, tzinfo=UTC),
-    )
-    broker = MemoryBroker()
-    event_bus = EventBus([BrokerEventHandler(broker)])
-    manager = TaskManager(event_bus=event_bus, max_workers=1)
+class TestTaskManagement:
+    def test_backtest_manager_runs_ticks_and_handles_broker_events(self) -> None:
+        tick = Tick(
+            instrument=USD_JPY,
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            bid=Money.of("150.10", "JPY"),
+            ask=Money.of("150.12", "JPY"),
+        )
+        definition = BacktestTaskDefinition(
+            name="Backtest USD_JPY",
+            instrument=USD_JPY,
+            start_at=datetime(2026, 1, 1, tzinfo=UTC),
+            end_at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+        broker = MemoryBroker()
+        event_bus = EventBus([BrokerEventHandler(broker)])
+        manager = TaskManager(event_bus=event_bus, max_workers=1)
 
-    started = manager.start_backtest(
-        definition,
-        data_source=MemoryDataSource([tick]),
-        strategy=OpeningStrategy(
-            name="opening",
-        ),
-    )
-    finished = manager.wait(started.id, timeout=2)
-    manager.shutdown()
+        started = manager.start_backtest(
+            definition,
+            data_source=MemoryDataSource([tick]),
+            strategy=OpeningStrategy(
+                name="opening",
+            ),
+        )
+        finished = manager.wait(started.id, timeout=2)
+        manager.shutdown()
 
-    assert started.status == TaskStatus.RUNNING
-    assert finished.status == TaskStatus.COMPLETED
-    assert finished.run_count == 1
-    assert broker.orders[0].side == OrderSide.BUY
-    assert broker.orders[0].id.value.version == 7
-    assert any(event.type == EventType.TASK_COMPLETED for event in event_bus.history)
+        assert started.status == TaskStatus.RUNNING
+        assert started.started_at == definition.start_at
+        assert finished.status == TaskStatus.COMPLETED
+        assert finished.completed_at == definition.end_at
+        assert finished.run_count == 1
+        assert broker.orders[0].side == OrderSide.BUY
+        assert broker.orders[0].id.value.version == 7
+        assert any(event.type == EventType.TASK_COMPLETED for event in event_bus.history)
+        strategy_event = next(
+            event for event in event_bus.history if isinstance(event, StrategyEvent)
+        )
+        completed_event = next(
+            event for event in event_bus.history if event.type == EventType.TASK_COMPLETED
+        )
+        assert strategy_event.timestamp == tick.timestamp
+        assert completed_event.timestamp == definition.end_at
 
+    def test_backtest_manager_restarts_completed_task(self) -> None:
+        tick = Tick(
+            instrument=USD_JPY,
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            bid=Money.of("150.10", "JPY"),
+            ask=Money.of("150.12", "JPY"),
+        )
+        definition = BacktestTaskDefinition(
+            name="Backtest USD_JPY",
+            instrument=USD_JPY,
+            start_at=datetime(2026, 1, 1, tzinfo=UTC),
+            end_at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+        manager = TaskManager(max_workers=1)
 
-def test_backtest_manager_restarts_completed_task() -> None:
-    tick = Tick(
-        instrument=USD_JPY,
-        timestamp=datetime(2026, 1, 1, tzinfo=UTC),
-        bid=Money.of("150.10", "JPY"),
-        ask=Money.of("150.12", "JPY"),
-    )
-    definition = BacktestTaskDefinition(
-        name="Backtest USD_JPY",
-        instrument=USD_JPY,
-        start_at=datetime(2026, 1, 1, tzinfo=UTC),
-        end_at=datetime(2026, 1, 2, tzinfo=UTC),
-    )
-    manager = TaskManager(max_workers=1)
+        started = manager.start_backtest(
+            definition,
+            data_source=MemoryDataSource([tick]),
+            strategy=HoldStrategy(
+                name="hold",
+            ),
+        )
+        first_finished = manager.wait(started.id, timeout=2)
+        restarted = manager.restart(started.id, timeout=2)
+        second_finished = manager.wait(started.id, timeout=2)
+        manager.shutdown()
 
-    started = manager.start_backtest(
-        definition,
-        data_source=MemoryDataSource([tick]),
-        strategy=HoldStrategy(
-            name="hold",
-        ),
-    )
-    first_finished = manager.wait(started.id, timeout=2)
-    restarted = manager.restart(started.id, timeout=2)
-    second_finished = manager.wait(started.id, timeout=2)
-    manager.shutdown()
+        assert first_finished.status == TaskStatus.COMPLETED
+        assert restarted.status == TaskStatus.RUNNING
+        assert restarted.started_at == definition.start_at
+        assert second_finished.status == TaskStatus.COMPLETED
+        assert second_finished.completed_at == definition.end_at
+        assert second_finished.run_count == 2
 
-    assert first_finished.status == TaskStatus.COMPLETED
-    assert restarted.status == TaskStatus.RUNNING
-    assert second_finished.status == TaskStatus.COMPLETED
-    assert second_finished.run_count == 2
+    def test_trading_manager_stops_running_task(self) -> None:
+        tick = Tick(
+            instrument=USD_JPY,
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            bid=Money.of("150.10", "JPY"),
+            ask=Money.of("150.12", "JPY"),
+        )
+        definition = TradingTaskDefinition(
+            name="Trading USD_JPY",
+            instrument=USD_JPY,
+            dry_run=True,
+        )
+        manager = TaskManager(max_workers=1)
 
+        started = manager.start_trading(
+            definition,
+            data_source=MemoryDataSource([tick], repeat=True, delay_seconds=0.01),
+            strategy=HoldStrategy(
+                name="hold",
+            ),
+        )
+        sleep(0.03)
+        stopped = manager.stop(started.id)
+        finished = manager.wait(started.id, timeout=2)
+        manager.shutdown()
 
-def test_trading_manager_stops_running_task() -> None:
-    tick = Tick(
-        instrument=USD_JPY,
-        timestamp=datetime(2026, 1, 1, tzinfo=UTC),
-        bid=Money.of("150.10", "JPY"),
-        ask=Money.of("150.12", "JPY"),
-    )
-    definition = TradingTaskDefinition(
-        name="Trading USD_JPY",
-        instrument=USD_JPY,
-        dry_run=True,
-    )
-    manager = TaskManager(max_workers=1)
-
-    started = manager.start_trading(
-        definition,
-        data_source=MemoryDataSource([tick], repeat=True, delay_seconds=0.01),
-        strategy=HoldStrategy(
-            name="hold",
-        ),
-    )
-    sleep(0.03)
-    stopped = manager.stop(started.id)
-    finished = manager.wait(started.id, timeout=2)
-    manager.shutdown()
-
-    assert stopped.status == TaskStatus.STOPPED
-    assert finished.status == TaskStatus.STOPPED
+        assert stopped.status == TaskStatus.STOPPED
+        assert finished.status == TaskStatus.STOPPED
