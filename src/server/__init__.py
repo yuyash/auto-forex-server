@@ -2,13 +2,13 @@
 
 from importlib.metadata import version
 
-from auto_forex_server.events import BrokerEventHandler, EventBus, RecordingEventHandler
-from auto_forex_server.providers import (
+from server.events import BrokerEventHandler, EventBus, RecordingEventHandler
+from server.providers import (
     ProviderFactory,
     ProviderName,
     create_provider,
 )
-from auto_forex_server.tasks import InMemoryTaskRepository, TaskManager
+from server.tasks import InMemoryTaskRepository, TaskManager
 
 __all__ = [
     "BrokerEventHandler",

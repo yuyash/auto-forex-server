@@ -15,7 +15,7 @@ from core import (
     TradeSide,
 )
 
-from auto_forex_server.orders import OrderFactory
+from server.orders import OrderFactory
 
 
 class EventHandlingError(RuntimeError):

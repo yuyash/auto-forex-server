@@ -25,10 +25,10 @@ from core import (
     TradingTaskDefinition,
 )
 
-from auto_forex_server.events import EventBus
-from auto_forex_server.tasks.repository import InMemoryTaskRepository, TaskRepository
-from auto_forex_server.tasks.runner import BacktestRunner, TaskExecutionControl, TradingRunner
-from auto_forex_server.tasks.types import Task
+from server.events import EventBus
+from server.tasks.repository import InMemoryTaskRepository, TaskRepository
+from server.tasks.runner import BacktestRunner, TaskExecutionControl, TradingRunner
+from server.tasks.types import Task
 
 RunnerType = Literal["backtest", "trading"]
 

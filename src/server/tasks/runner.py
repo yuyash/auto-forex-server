@@ -25,9 +25,9 @@ from core import (
     TradingTaskDefinition,
 )
 
-from auto_forex_server.events import EventBus
-from auto_forex_server.tasks.repository import TaskRepository
-from auto_forex_server.tasks.types import Task
+from server.events import EventBus
+from server.tasks.repository import TaskRepository
+from server.tasks.types import Task
 
 
 @dataclass(slots=True)
@@ -185,9 +185,9 @@ class BacktestRunner(TaskRunner):
         context = self._context(task)
 
         try:
-            self._publish_strategy_result(
-                self.strategy.on_start(context), timestamp=self.clock.now()
-            )
+            start_result = self.strategy.on_start(context)
+            context = context.with_state(start_result.state)
+            self._publish_strategy_result(start_result, timestamp=self.clock.now())
             for tick in self.data_source.ticks(
                 instrument=task.instrument,
                 start_at=definition.start_at,
@@ -201,10 +201,9 @@ class BacktestRunner(TaskRunner):
                     stopped = self._stop_current()
                     return stopped
 
-                self._publish_strategy_result(
-                    self.strategy.on_tick(tick, context),
-                    timestamp=self.clock.now(),
-                )
+                tick_result = self.strategy.on_tick(tick, context)
+                context = context.with_state(tick_result.state)
+                self._publish_strategy_result(tick_result, timestamp=self.clock.now())
 
             self._set_clock(definition.end_at)
             self._publish_strategy_result(
@@ -240,7 +239,9 @@ class TradingRunner(TaskRunner):
         context = self._context(task)
 
         try:
-            self._publish_strategy_result(self.strategy.on_start(context))
+            start_result = self.strategy.on_start(context)
+            context = context.with_state(start_result.state)
+            self._publish_strategy_result(start_result)
             for tick in self.data_source.ticks(instrument=task.instrument):
                 if execution_control.pause_requested:
                     paused = self._pause_current()
@@ -249,7 +250,9 @@ class TradingRunner(TaskRunner):
                     stopped = self._stop_current()
                     return stopped
 
-                self._publish_strategy_result(self.strategy.on_tick(tick, context))
+                tick_result = self.strategy.on_tick(tick, context)
+                context = context.with_state(tick_result.state)
+                self._publish_strategy_result(tick_result)
 
             self._publish_strategy_result(self.strategy.on_stop(context))
             stopped = self._stop_current()

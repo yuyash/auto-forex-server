@@ -9,7 +9,7 @@ from uuid import UUID
 
 from core import TaskStatus
 
-from auto_forex_server.tasks.types import Task
+from server.tasks.types import Task
 
 
 class TaskNotFoundError(KeyError):

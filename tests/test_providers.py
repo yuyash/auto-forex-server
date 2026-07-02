@@ -14,7 +14,7 @@ from oanda import (
 )
 from pydantic import SecretStr
 
-from auto_forex_server.providers import (
+from server.providers import (
     ProviderFactory,
     ProviderName,
     create_provider,

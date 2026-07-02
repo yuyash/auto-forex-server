@@ -31,8 +31,8 @@ from core import (
     TradingTaskDefinition,
 )
 
-from auto_forex_server.events import BrokerEventHandler, EventBus
-from auto_forex_server.tasks import TaskManager
+from server.events import BrokerEventHandler, EventBus
+from server.tasks import TaskManager
 
 USD_JPY = CurrencyPair.of("USD_JPY")
 
