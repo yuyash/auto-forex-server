@@ -35,7 +35,7 @@ class OrderFactory:
                 reason_code=event.reason.code.value,
                 reason_rule_id=event.reason.rule_id,
                 reason_evidence=event.reason.evidence.to_dict(),
-            ),
+            ).merge(event.metadata),
         )
 
     @staticmethod

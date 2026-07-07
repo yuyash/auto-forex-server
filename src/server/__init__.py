@@ -2,7 +2,7 @@
 
 from importlib.metadata import version
 
-from server.events import BrokerEventHandler, EventBus, RecordingEventHandler
+from server.events import EventBus, RecordingEventHandler
 from server.providers import (
     ProviderFactory,
     ProviderName,
@@ -11,7 +11,6 @@ from server.providers import (
 from server.tasks import InMemoryTaskRepository, TaskManager
 
 __all__ = [
-    "BrokerEventHandler",
     "EventBus",
     "InMemoryTaskRepository",
     "ProviderFactory",

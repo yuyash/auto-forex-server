@@ -1,16 +1,12 @@
 """Event APIs for the server package."""
 
-from server.events.bus import EventBus, EventHandler
-from server.events.handlers import (
-    BrokerEventHandler,
-    EventHandlingError,
-    RecordingEventHandler,
-)
+from server.events.bus import EventBus, EventHandler, EventPublication, EventSubscription
+from server.events.handlers import RecordingEventHandler
 
 __all__ = [
-    "BrokerEventHandler",
     "EventBus",
     "EventHandler",
-    "EventHandlingError",
+    "EventPublication",
+    "EventSubscription",
     "RecordingEventHandler",
 ]

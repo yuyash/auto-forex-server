@@ -24,6 +24,7 @@ from core import (
     StrategyDecisionCode,
     StrategyDecisionReason,
     StrategyEvent,
+    StrategyExecutionReport,
     StrategyResult,
     TaskStatus,
     Tick,
@@ -31,7 +32,7 @@ from core import (
     TradingTaskDefinition,
 )
 
-from server.events import BrokerEventHandler, EventBus
+from server.events import EventBus
 from server.tasks import TaskManager
 
 USD_JPY = CurrencyPair.of("USD_JPY")
@@ -148,7 +149,7 @@ class TestTaskManagement:
             end_at=datetime(2026, 1, 2, tzinfo=UTC),
         )
         broker = MemoryBroker()
-        event_bus = EventBus([BrokerEventHandler(broker)])
+        event_bus = EventBus()
         manager = TaskManager(event_bus=event_bus, max_workers=1)
 
         started = manager.start_backtest(
@@ -157,6 +158,7 @@ class TestTaskManagement:
             strategy=OpeningStrategy(
                 name="opening",
             ),
+            broker=broker,
         )
         finished = manager.wait(started.id, timeout=2)
         manager.shutdown()
@@ -169,13 +171,17 @@ class TestTaskManagement:
         assert broker.orders[0].side == OrderSide.BUY
         assert broker.orders[0].id.value.version == 7
         assert any(event.type == EventType.TASK_COMPLETED for event in event_bus.history)
-        strategy_event = next(
-            event for event in event_bus.history if isinstance(event, StrategyEvent)
-        )
+        strategy_event = event_bus.select(event_class=StrategyEvent)[0]
+        report_event = event_bus.select(event_class=StrategyExecutionReport)[0]
         completed_event = next(
             event for event in event_bus.history if event.type == EventType.TASK_COMPLETED
         )
+        assert isinstance(strategy_event, StrategyEvent)
+        assert isinstance(report_event, StrategyExecutionReport)
         assert strategy_event.timestamp == tick.timestamp
+        assert strategy_event.action == StrategyAction.OPEN_POSITION
+        assert report_event.type == EventType.ORDER_FILLED
+        assert report_event.event is strategy_event
         assert completed_event.timestamp == definition.end_at
 
     def test_backtest_manager_restarts_completed_task(self) -> None:

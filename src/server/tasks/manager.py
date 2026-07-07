@@ -10,6 +10,7 @@ from uuid import UUID
 
 from core import (
     BacktestTaskDefinition,
+    Broker,
     Clock,
     DataSource,
     Event,
@@ -44,6 +45,7 @@ class TaskRuntime:
     type: RunnerType
     data_source: DataSource
     strategy: Strategy
+    broker: Broker | None
     clock: Clock
     control: TaskExecutionControl
     future: Future[Task]
@@ -71,6 +73,7 @@ class TaskManager:
         *,
         data_source: DataSource,
         strategy: Strategy,
+        broker: Broker | None = None,
     ) -> ExecutableTask:
         """Start a backtest task in the background."""
         clock = ManualClock(definition.start_at)
@@ -81,6 +84,7 @@ class TaskManager:
             type="backtest",
             data_source=data_source,
             strategy=strategy,
+            broker=broker,
             clock=clock,
         )
         return started
@@ -91,6 +95,7 @@ class TaskManager:
         *,
         data_source: DataSource,
         strategy: Strategy,
+        broker: Broker | None = None,
     ) -> ExecutableTask:
         """Start a trading task in the background."""
         clock = SystemClock()
@@ -101,6 +106,7 @@ class TaskManager:
             type="trading",
             data_source=data_source,
             strategy=strategy,
+            broker=broker,
             clock=clock,
         )
         return started
@@ -146,6 +152,7 @@ class TaskManager:
             type=runtime.type,
             data_source=runtime.data_source,
             strategy=runtime.strategy,
+            broker=runtime.broker,
             clock=clock,
         )
         return restarted
@@ -172,6 +179,7 @@ class TaskManager:
         type: RunnerType,
         data_source: DataSource,
         strategy: Strategy,
+        broker: Broker | None,
         clock: Clock,
     ) -> None:
         with self._lock:
@@ -188,6 +196,7 @@ class TaskManager:
                 type=type,
                 data_source=data_source,
                 strategy=strategy,
+                broker=broker,
                 clock=clock,
             )
             future = self._executor.submit(runner.run, control)
@@ -195,6 +204,7 @@ class TaskManager:
                 type=type,
                 data_source=data_source,
                 strategy=strategy,
+                broker=broker,
                 clock=clock,
                 control=control,
                 future=future,
@@ -207,6 +217,7 @@ class TaskManager:
         type: RunnerType,
         data_source: DataSource,
         strategy: Strategy,
+        broker: Broker | None,
         clock: Clock,
     ) -> BacktestRunner | TradingRunner:
         if type == "backtest":
@@ -217,6 +228,7 @@ class TaskManager:
                 task=task,
                 data_source=data_source,
                 strategy=strategy,
+                broker=broker,
                 event_bus=self.event_bus,
                 repository=self.repository,
                 clock=clock,
@@ -229,6 +241,7 @@ class TaskManager:
             task=task,
             data_source=data_source,
             strategy=strategy,
+            broker=broker,
             event_bus=self.event_bus,
             repository=self.repository,
             clock=clock,
