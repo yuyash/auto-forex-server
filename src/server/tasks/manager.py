@@ -38,7 +38,7 @@ class TaskAlreadyRunningError(RuntimeError):
     """Raised when a task already has an active runner."""
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class TaskRuntime:
     """Runtime dependencies and state for a managed task."""
 

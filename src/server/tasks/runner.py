@@ -34,7 +34,7 @@ from server.tasks.repository import TaskRepository
 from server.tasks.types import Task
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class TaskExecutionControl:
     """Cancellation and pause signals for a running task."""
 
