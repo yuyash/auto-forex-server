@@ -2,16 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
-from decimal import Decimal
 from time import sleep
 
 import pytest
 from core import (
+    Account,
+    AccountId,
     BacktestTaskDefinition,
     Broker,
     BrokerOrderId,
     CurrencyPair,
     DataSource,
+    EventBus,
     EventType,
     Money,
     Order,
@@ -28,16 +30,16 @@ from core import (
     StrategyEventRequest,
     StrategyExecutionResponse,
     StrategyResult,
+    TaskManager,
     TaskStatus,
     Tick,
     TradeSide,
     TradingTaskDefinition,
+    Units,
 )
 
-from server.events import EventBus
-from server.tasks import TaskManager
-
 USD_JPY = CurrencyPair.of("USD_JPY")
+TEST_ACCOUNT = Account(id=AccountId.of("test-account"))
 
 
 class MemoryDataSource(DataSource):
@@ -81,7 +83,7 @@ class OpeningStrategy(Strategy):
                     action=StrategyAction.OPEN_TRADE,
                     instrument=tick.instrument,
                     side=TradeSide.BUY,
-                    units=Decimal("1000"),
+                    units=Units("1000"),
                     price=tick.ask,
                     reason=StrategyDecisionReason(
                         code=StrategyDecisionCode.ENTRY_SIGNAL,
@@ -117,7 +119,7 @@ class MemoryBroker(Broker):
         *,
         position: Position,
         side: PositionSide,
-        units: Decimal | None = None,
+        units: Units | None = None,
     ) -> Order:
         state = position.require_side(side)
         amount = units or state.units
@@ -273,6 +275,7 @@ class TestTaskManagement:
         definition = TradingTaskDefinition(
             name="Trading USD_JPY",
             instrument=USD_JPY,
+            account=TEST_ACCOUNT,
             dry_run=True,
         )
         manager = TaskManager(max_workers=1)
@@ -302,6 +305,7 @@ class TestTaskManagement:
         definition = TradingTaskDefinition(
             name="Trading USD_JPY",
             instrument=USD_JPY,
+            account=TEST_ACCOUNT,
             dry_run=True,
         )
 
@@ -325,6 +329,7 @@ class TestTaskManagement:
         definition = TradingTaskDefinition(
             name="Trading USD_JPY",
             instrument=USD_JPY,
+            account=TEST_ACCOUNT,
             dry_run=True,
         )
         broker = MemoryBroker()
@@ -357,6 +362,7 @@ class TestTaskManagement:
         definition = TradingTaskDefinition(
             name="Trading USD_JPY",
             instrument=USD_JPY,
+            account=TEST_ACCOUNT,
             dry_run=False,
         )
         manager = TaskManager(max_workers=1)

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from decimal import Decimal
-
 from core import (
     CurrencyPair,
     Event,
+    EventBus,
     EventSource,
     EventType,
     Metadata,
@@ -12,15 +11,15 @@ from core import (
     Order,
     OrderSide,
     OrderStatus,
+    RecordingEventHandler,
     StrategyAction,
     StrategyEvent,
     StrategyEventRequest,
     StrategyExecutionResponse,
     TradeSide,
+    Units,
     new_uuid,
 )
-
-from server.events import EventBus, RecordingEventHandler
 
 
 class RaisingEventHandler:
@@ -36,7 +35,7 @@ class TestEvents:
         event_bus = EventBus()
         event_bus.subscribe(RaisingEventHandler())
         event_bus.subscribe(recording_handler)
-        event = Event(type=EventType.TASK_STARTED, source=EventSource.SERVER)
+        event = Event(type=EventType.TASK_STARTED, source=EventSource.CORE)
 
         publication = event_bus.publish(event)
 
@@ -49,7 +48,7 @@ class TestEvents:
         failure_event = publication.failure_events[0]
         assert failure_event in event_bus.history
         assert failure_event.type == EventType.ERROR_OCCURRED
-        assert failure_event.source == EventSource.SERVER
+        assert failure_event.source == EventSource.CORE
         assert failure_event.metadata["original_event_id"] == str(event.id)
         assert failure_event.metadata["original_event_type"] == EventType.TASK_STARTED.value
         assert failure_event.metadata["exception_type"] == "RuntimeError"
@@ -65,7 +64,7 @@ class TestEvents:
             action=StrategyAction.CLOSE_TRADE,
             instrument=CurrencyPair.of("USD_JPY"),
             side=TradeSide.SELL,
-            units=Decimal("1000"),
+            units=Units("1000"),
             price=Money.of("150.50", "JPY"),
             metadata=Metadata.of(
                 close_reason="take_profit",
@@ -77,10 +76,10 @@ class TestEvents:
             order=Order(
                 instrument=CurrencyPair.of("USD_JPY"),
                 side=OrderSide.SELL,
-                units=Decimal("1000"),
+                units=Units("1000"),
                 price=Money.of("150.52", "JPY"),
                 status=OrderStatus.FILLED,
-                filled_units=Decimal("1000"),
+                filled_units=Units("1000"),
             ),
         )
 

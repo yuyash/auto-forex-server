@@ -5,13 +5,8 @@ description = "Server package for AutoForexV2."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "apscheduler>=3.11.2",
     "auto-forex-core",
     "oanda",
-    "auto-forex-protobuf",
-    "auto-forex-snowball",
-    "grpcio>=1.81.1",
-    "pydantic-settings>=2.14.2",
 ]
 
 [build-system]
@@ -47,5 +42,3 @@ python-version = "3.14"
 [tool.uv.sources]
 auto-forex-core = { path = "../core" }
 oanda = { path = "../oanda" }
-auto-forex-protobuf = { path = "../protobuf" }
-auto-forex-snowball = { path = "../snowball" }

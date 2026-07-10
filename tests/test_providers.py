@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import cast
 
-import pytest
 from core import TradingProvider
 from oanda import (
     OandaAccountManager,
@@ -45,7 +44,3 @@ class TestProviders:
         provider = ProviderFactory().create(ProviderName.OANDA, settings=settings)
 
         assert isinstance(provider, OandaProvider)
-
-    def test_create_oanda_provider_services_rejects_wrong_settings_type(self) -> None:
-        with pytest.raises(TypeError, match="OANDA provider requires OandaSettings"):
-            create_provider(ProviderName.OANDA, settings=object())
