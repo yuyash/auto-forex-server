@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from time import sleep
 
+import pytest
 from core import (
     BacktestTaskDefinition,
     Broker,
@@ -246,3 +247,81 @@ class TestTaskManagement:
 
         assert stopped.status == TaskStatus.STOPPED
         assert finished.status == TaskStatus.STOPPED
+
+    def test_task_manager_context_manager_stops_running_tasks_on_exit(self) -> None:
+        tick = Tick(
+            instrument=USD_JPY,
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            bid=Money.of("150.10", "JPY"),
+            ask=Money.of("150.12", "JPY"),
+        )
+        definition = TradingTaskDefinition(
+            name="Trading USD_JPY",
+            instrument=USD_JPY,
+            dry_run=True,
+        )
+
+        with TaskManager(max_workers=1) as manager:
+            started = manager.start_trading(
+                definition,
+                data_source=MemoryDataSource([tick], repeat=True, delay_seconds=0.01),
+                strategy=HoldStrategy(name="hold"),
+            )
+            sleep(0.03)
+
+        assert manager.get(started.id).status == TaskStatus.STOPPED
+
+    def test_trading_dry_run_does_not_call_broker_even_when_broker_is_configured(self) -> None:
+        tick = Tick(
+            instrument=USD_JPY,
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            bid=Money.of("150.10", "JPY"),
+            ask=Money.of("150.12", "JPY"),
+        )
+        definition = TradingTaskDefinition(
+            name="Trading USD_JPY",
+            instrument=USD_JPY,
+            dry_run=True,
+        )
+        broker = MemoryBroker()
+        event_bus = EventBus()
+        manager = TaskManager(event_bus=event_bus, max_workers=1)
+
+        started = manager.start_trading(
+            definition,
+            data_source=MemoryDataSource([tick]),
+            strategy=OpeningStrategy(name="opening"),
+            broker=broker,
+        )
+        finished = manager.wait(started.id, timeout=2)
+        manager.shutdown()
+
+        assert finished.status == TaskStatus.STOPPED
+        assert broker.orders == []
+        report_event = event_bus.select(event_class=StrategyExecutionReport)[0]
+        assert isinstance(report_event, StrategyExecutionReport)
+        assert report_event.order is not None
+        assert report_event.order.status == OrderStatus.FILLED
+
+    def test_trading_requires_broker_when_dry_run_is_disabled(self) -> None:
+        tick = Tick(
+            instrument=USD_JPY,
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            bid=Money.of("150.10", "JPY"),
+            ask=Money.of("150.12", "JPY"),
+        )
+        definition = TradingTaskDefinition(
+            name="Trading USD_JPY",
+            instrument=USD_JPY,
+            dry_run=False,
+        )
+        manager = TaskManager(max_workers=1)
+
+        with pytest.raises(ValueError, match="requires broker"):
+            manager.start_trading(
+                definition,
+                data_source=MemoryDataSource([tick]),
+                strategy=OpeningStrategy(name="opening"),
+            )
+
+        manager.shutdown()

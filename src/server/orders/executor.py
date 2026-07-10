@@ -6,7 +6,6 @@ from collections.abc import Sequence
 
 from core import (
     Broker,
-    Event,
     Metadata,
     Order,
     OrderSide,
@@ -29,16 +28,12 @@ class StrategyEventExecutor:
         self,
         *,
         broker: Broker | None = None,
+        dry_run: bool = False,
         order_factory: OrderFactory | None = None,
     ) -> None:
         self.broker = broker
+        self.dry_run = dry_run
         self.order_factory = order_factory or OrderFactory()
-
-    def handle(self, event: Event) -> tuple[StrategyExecutionReport, ...] | None:
-        """Execute strategy events published through the event bus."""
-        if not isinstance(event, StrategyEvent):
-            return None
-        return self.execute(event)
 
     def execute_many(
         self,
@@ -78,10 +73,15 @@ class StrategyEventExecutor:
             side=side,
             units=units,
         )
-        if self.broker is None:
+        if self.dry_run:
             return StrategyExecutionReport(
                 event=event,
                 order=self._filled_dry_run_order(order),
+            )
+        if self.broker is None:
+            return StrategyExecutionReport(
+                event=event,
+                execution_error="broker is required when dry_run is false",
             )
         return StrategyExecutionReport(
             event=event,
@@ -101,7 +101,7 @@ class StrategyEventExecutor:
                     execution_error="close-position event requires side",
                 ),
             )
-        if self.broker is None:
+        if self.dry_run:
             if units is None:
                 return (
                     StrategyExecutionReport(
@@ -127,6 +127,13 @@ class StrategyEventExecutor:
                             ).merge(event.metadata),
                         )
                     ),
+                ),
+            )
+        if self.broker is None:
+            return (
+                StrategyExecutionReport(
+                    event=event,
+                    execution_error="broker is required when dry_run is false",
                 ),
             )
         reports: list[StrategyExecutionReport] = []

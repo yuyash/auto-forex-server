@@ -5,7 +5,8 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from threading import RLock
-from typing import Literal
+from types import TracebackType
+from typing import Literal, Self
 from uuid import UUID
 
 from core import (
@@ -67,6 +68,22 @@ class TaskManager:
         self._runtimes: dict[UUID, TaskRuntime] = {}
         self._lock = RLock()
 
+    def __enter__(self) -> Self:
+        """Return this manager for context-managed task execution."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Request active tasks to stop and shut down the executor."""
+        _ = exc_type
+        _ = exc
+        _ = traceback
+        self.shutdown(wait=True)
+
     def start_backtest(
         self,
         definition: BacktestTaskDefinition,
@@ -98,6 +115,9 @@ class TaskManager:
         broker: Broker | None = None,
     ) -> ExecutableTask:
         """Start a trading task in the background."""
+        if not definition.dry_run and broker is None:
+            msg = "trading task requires broker when dry_run is false"
+            raise ValueError(msg)
         clock = SystemClock()
         started = ExecutableTask.from_definition(definition, clock=clock).start(clock=clock)
         self.repository.save(started)

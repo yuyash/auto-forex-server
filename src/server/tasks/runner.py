@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from threading import Event as ThreadEvent
+from uuid import UUID
 
 from core import (
     BacktestTaskDefinition,
@@ -21,14 +22,13 @@ from core import (
     Strategy,
     StrategyContext,
     StrategyEvent,
-    StrategyExecutionReport,
     StrategyResult,
     SystemClock,
     TaskAction,
     TradingTaskDefinition,
 )
 
-from server.events import EventBus, EventPublication, EventSubscription
+from server.events import EventBus
 from server.orders import StrategyEventExecutor
 from server.tasks.repository import TaskRepository
 from server.tasks.types import Task
@@ -60,6 +60,144 @@ class TaskExecutionControl:
         return self._pause_requested.is_set()
 
 
+class TaskLifecycle:
+    """Persist task lifecycle transitions and publish lifecycle events."""
+
+    def __init__(
+        self,
+        *,
+        task_id: UUID,
+        event_bus: EventBus,
+        repository: TaskRepository,
+        clock: Clock,
+    ) -> None:
+        self.task_id = task_id
+        self.event_bus = event_bus
+        self.repository = repository
+        self.clock = clock
+
+    def ensure_running(self) -> Task:
+        """Return a running task, starting it when needed."""
+        task = self.repository.get(self.task_id)
+        if not task.is_running:
+            task = self.repository.save(task.start(clock=self.clock))
+        self.publish_task_event(EventType.TASK_STARTED, task)
+        return task
+
+    def pause_current(self) -> Task:
+        """Pause the current task when the transition is allowed."""
+        task = self.repository.get(self.task_id)
+        if task.can(TaskAction.PAUSE):
+            task = self.repository.save(task.pause(clock=self.clock))
+            self.publish_task_event(EventType.TASK_PAUSED, task)
+        return task
+
+    def stop_current(self) -> Task:
+        """Stop the current task when the transition is allowed."""
+        task = self.repository.get(self.task_id)
+        if task.can(TaskAction.STOP):
+            task = self.repository.save(task.stop(clock=self.clock))
+            self.publish_task_event(EventType.TASK_STOPPED, task)
+        return task
+
+    def complete_current(self) -> Task:
+        """Complete the current task when the transition is allowed."""
+        task = self.repository.get(self.task_id)
+        if task.can(TaskAction.COMPLETE):
+            task = self.repository.save(task.complete(clock=self.clock))
+            self.publish_task_event(EventType.TASK_COMPLETED, task)
+        return task
+
+    def fail_current(self, reason: str) -> Task:
+        """Fail the current task when the transition is allowed."""
+        task = self.repository.get(self.task_id)
+        if task.can(TaskAction.FAIL):
+            task = self.repository.save(task.fail(reason, clock=self.clock))
+            self.publish_task_event(
+                EventType.TASK_FAILED,
+                task,
+                metadata=Metadata.of(reason=reason),
+            )
+        return task
+
+    def publish_task_event(
+        self,
+        event_type: EventType,
+        task: Task,
+        *,
+        metadata: Metadata | None = None,
+    ) -> None:
+        """Publish a task lifecycle event."""
+        event_metadata = Metadata.of(
+            task_status=task.status.value,
+            task_type=task.task_type.value,
+        )
+        if metadata is not None:
+            event_metadata = event_metadata.merge(metadata)
+
+        self.event_bus.publish(
+            Event(
+                type=event_type,
+                timestamp=self.clock.now(),
+                task_id=task.id,
+                source=EventSource.SERVER,
+                metadata=event_metadata,
+            )
+        )
+
+
+class StrategyExecutionPipeline:
+    """Run strategy results through event publishing and broker execution."""
+
+    def __init__(
+        self,
+        *,
+        strategy: Strategy,
+        event_executor: StrategyEventExecutor,
+        event_bus: EventBus,
+    ) -> None:
+        self.strategy = strategy
+        self.event_executor = event_executor
+        self.event_bus = event_bus
+
+    def context(self, task: Task) -> StrategyContext:
+        """Create the strategy context for a task."""
+        return StrategyContext(
+            task_id=task.id,
+            task_type=task.task_type,
+            instrument=task.instrument,
+            metadata=Metadata.of(strategy_name=self.strategy.name),
+        )
+
+    def process_result(
+        self,
+        result: StrategyResult,
+        context: StrategyContext,
+        *,
+        timestamp: datetime | None = None,
+    ) -> StrategyContext:
+        """Publish strategy events, execute broker commands, and reconcile state."""
+        execution_context = context.with_state(result.state)
+        events = self._events_with_timestamp(result.events, timestamp=timestamp)
+        self.event_bus.publish_many(events)
+        reports = self.event_executor.execute_many(events)
+        self.event_bus.publish_many(reports)
+        if not reports:
+            return execution_context
+        state = self.strategy.on_execution_reports(reports, execution_context)
+        return execution_context.with_state(state)
+
+    @staticmethod
+    def _events_with_timestamp(
+        events: tuple[StrategyEvent, ...],
+        *,
+        timestamp: datetime | None,
+    ) -> tuple[StrategyEvent, ...]:
+        if timestamp is None:
+            return events
+        return tuple(event.evolve(timestamp=timestamp) for event in events)
+
+
 class TaskRunner(ABC):
     """Base runner shared by backtest and live trading execution."""
 
@@ -79,137 +217,31 @@ class TaskRunner(ABC):
         self.strategy = strategy
         self.event_bus = event_bus
         self.repository = repository
-        self.event_executor = StrategyEventExecutor(broker=broker)
         self.clock = clock or SystemClock()
+        self.lifecycle = TaskLifecycle(
+            task_id=task.id,
+            event_bus=event_bus,
+            repository=repository,
+            clock=self.clock,
+        )
+        self.pipeline = StrategyExecutionPipeline(
+            strategy=strategy,
+            event_executor=StrategyEventExecutor(
+                broker=broker,
+                dry_run=self._dry_run_for_task(task, broker=broker),
+            ),
+            event_bus=event_bus,
+        )
 
     @abstractmethod
     def run(self, control: TaskExecutionControl | None = None) -> Task:
         """Run the task until completion, stop, pause, or failure."""
 
-    def _ensure_running(self) -> Task:
-        task = self.repository.get(self.task.id)
-        if not task.is_running:
-            task = self.repository.save(task.start(clock=self.clock))
-        self._publish_task_event(EventType.TASK_STARTED, task)
-        return task
-
-    def _context(self, task: Task) -> StrategyContext:
-        return StrategyContext(
-            task_id=task.id,
-            task_type=task.task_type,
-            instrument=task.instrument,
-            metadata=Metadata.of(strategy_name=self.strategy.name),
-        )
-
-    def _process_strategy_result(
-        self,
-        result: StrategyResult,
-        context: StrategyContext,
-        *,
-        timestamp: datetime | None = None,
-    ) -> StrategyContext:
-        execution_context = context.with_state(result.state)
-        publications = self._publish_strategy_events(result.events, timestamp=timestamp)
-        reports = self._execution_reports(publications)
-        self._publish_execution_reports(reports)
-        if not reports:
-            return execution_context
-        state = self.strategy.on_execution_reports(reports, execution_context)
-        return execution_context.with_state(state)
-
-    def _subscribe_event_executor(self) -> EventSubscription:
-        return self.event_bus.subscribe(
-            self.event_executor,
-            event_class=StrategyEvent,
-            predicate=lambda event: event.task_id == self.task.id,
-        )
-
-    def _publish_strategy_events(
-        self,
-        events: tuple[StrategyEvent, ...],
-        *,
-        timestamp: datetime | None = None,
-    ) -> tuple[EventPublication, ...]:
-        return self.event_bus.publish_many(
-            event if timestamp is None else event.evolve(timestamp=timestamp) for event in events
-        )
-
-    def _execution_reports(
-        self,
-        publications: tuple[EventPublication, ...],
-    ) -> tuple[StrategyExecutionReport, ...]:
-        reports: list[StrategyExecutionReport] = []
-        for publication in publications:
-            for result in publication.results:
-                if isinstance(result, StrategyExecutionReport):
-                    reports.append(result)
-                elif isinstance(result, tuple):
-                    reports.extend(
-                        item for item in result if isinstance(item, StrategyExecutionReport)
-                    )
-        return tuple(reports)
-
-    def _publish_execution_reports(
-        self,
-        reports: tuple[StrategyExecutionReport, ...],
-    ) -> None:
-        self.event_bus.publish_many(reports)
-
-    def _pause_current(self) -> Task:
-        task = self.repository.get(self.task.id)
-        if task.can(TaskAction.PAUSE):
-            task = self.repository.save(task.pause(clock=self.clock))
-            self._publish_task_event(EventType.TASK_PAUSED, task)
-        return task
-
-    def _stop_current(self) -> Task:
-        task = self.repository.get(self.task.id)
-        if task.can(TaskAction.STOP):
-            task = self.repository.save(task.stop(clock=self.clock))
-            self._publish_task_event(EventType.TASK_STOPPED, task)
-        return task
-
-    def _complete_current(self) -> Task:
-        task = self.repository.get(self.task.id)
-        if task.can(TaskAction.COMPLETE):
-            task = self.repository.save(task.complete(clock=self.clock))
-            self._publish_task_event(EventType.TASK_COMPLETED, task)
-        return task
-
-    def _fail_current(self, reason: str) -> Task:
-        task = self.repository.get(self.task.id)
-        if task.can(TaskAction.FAIL):
-            task = self.repository.save(task.fail(reason, clock=self.clock))
-            self._publish_task_event(
-                EventType.TASK_FAILED,
-                task,
-                metadata=Metadata.of(reason=reason),
-            )
-        return task
-
-    def _publish_task_event(
-        self,
-        event_type: EventType,
-        task: Task,
-        *,
-        metadata: Metadata | None = None,
-    ) -> None:
-        event_metadata = Metadata.of(
-            task_status=task.status.value,
-            task_type=task.task_type.value,
-        )
-        if metadata is not None:
-            event_metadata = event_metadata.merge(metadata)
-
-        self.event_bus.publish(
-            Event(
-                type=event_type,
-                timestamp=self.clock.now(),
-                task_id=task.id,
-                source=EventSource.SERVER,
-                metadata=event_metadata,
-            )
-        )
+    @staticmethod
+    def _dry_run_for_task(task: Task, *, broker: Broker | None) -> bool:
+        if isinstance(task.definition, TradingTaskDefinition):
+            return task.definition.dry_run
+        return broker is None
 
 
 class BacktestRunner(TaskRunner):
@@ -223,62 +255,59 @@ class BacktestRunner(TaskRunner):
         if not isinstance(self.task.definition, BacktestTaskDefinition):
             msg = "backtest runner requires BacktestTaskDefinition"
             raise TypeError(msg)
-        subscription = self._subscribe_event_executor()
+        definition = self.task.definition
+        self._ensure_manual_clock(definition.start_at)
+        self._set_clock(definition.start_at)
+        task = self.lifecycle.ensure_running()
+        if not isinstance(task.definition, BacktestTaskDefinition):
+            msg = "backtest runner requires BacktestTaskDefinition"
+            raise TypeError(msg)
+        definition = task.definition
+        context = self.pipeline.context(task)
+
         try:
-            definition = self.task.definition
-            self._ensure_manual_clock(definition.start_at)
-            self._set_clock(definition.start_at)
-            task = self._ensure_running()
-            if not isinstance(task.definition, BacktestTaskDefinition):
-                msg = "backtest runner requires BacktestTaskDefinition"
-                raise TypeError(msg)
-            definition = task.definition
-            context = self._context(task)
+            start_result = self.strategy.on_start(context)
+            context = self.pipeline.process_result(
+                start_result,
+                context,
+                timestamp=self.clock.now(),
+            )
+            for tick in self.data_source.ticks(
+                instrument=task.instrument,
+                start_at=definition.start_at,
+                end_at=definition.end_at,
+            ):
+                self._set_clock(tick.timestamp)
+                if execution_control.pause_requested:
+                    paused = self.lifecycle.pause_current()
+                    return paused
+                if execution_control.stop_requested:
+                    stopped = self.lifecycle.stop_current()
+                    return stopped
 
-            try:
-                start_result = self.strategy.on_start(context)
-                context = self._process_strategy_result(
-                    start_result,
+                tick_result = self.strategy.on_tick(tick, context)
+                context = self.pipeline.process_result(
+                    tick_result,
                     context,
                     timestamp=self.clock.now(),
                 )
-                for tick in self.data_source.ticks(
-                    instrument=task.instrument,
-                    start_at=definition.start_at,
-                    end_at=definition.end_at,
-                ):
-                    self._set_clock(tick.timestamp)
-                    if execution_control.pause_requested:
-                        paused = self._pause_current()
-                        return paused
-                    if execution_control.stop_requested:
-                        stopped = self._stop_current()
-                        return stopped
 
-                    tick_result = self.strategy.on_tick(tick, context)
-                    context = self._process_strategy_result(
-                        tick_result,
-                        context,
-                        timestamp=self.clock.now(),
-                    )
-
-                self._set_clock(definition.end_at)
-                context = self._process_strategy_result(
-                    self.strategy.on_stop(context),
-                    context,
-                    timestamp=self.clock.now(),
-                )
-                completed = self._complete_current()
-                return completed
-            except Exception as exc:
-                failed = self._fail_current(str(exc))
-                return failed
-        finally:
-            self.event_bus.unsubscribe(subscription)
+            self._set_clock(definition.end_at)
+            context = self.pipeline.process_result(
+                self.strategy.on_stop(context),
+                context,
+                timestamp=self.clock.now(),
+            )
+            completed = self.lifecycle.complete_current()
+            return completed
+        except Exception as exc:
+            failed = self.lifecycle.fail_current(str(exc))
+            return failed
 
     def _ensure_manual_clock(self, start_at: datetime) -> None:
         if isinstance(self.clock, SystemClock):
             self.clock = ManualClock(start_at)
+            self.lifecycle.clock = self.clock
 
     def _set_clock(self, timestamp: datetime) -> None:
         if isinstance(self.clock, ManualClock):
@@ -293,33 +322,29 @@ class TradingRunner(TaskRunner):
     def run(self, control: TaskExecutionControl | None = None) -> ExecutableTask:
         """Run the trading task against a live tick stream."""
         execution_control = control or TaskExecutionControl()
-        subscription = self._subscribe_event_executor()
+        task = self.lifecycle.ensure_running()
+        if not isinstance(task.definition, TradingTaskDefinition):
+            msg = "trading runner requires TradingTaskDefinition"
+            raise TypeError(msg)
+        context = self.pipeline.context(task)
+
         try:
-            task = self._ensure_running()
-            if not isinstance(task.definition, TradingTaskDefinition):
-                msg = "trading runner requires TradingTaskDefinition"
-                raise TypeError(msg)
-            context = self._context(task)
+            start_result = self.strategy.on_start(context)
+            context = self.pipeline.process_result(start_result, context)
+            for tick in self.data_source.ticks(instrument=task.instrument):
+                if execution_control.pause_requested:
+                    paused = self.lifecycle.pause_current()
+                    return paused
+                if execution_control.stop_requested:
+                    stopped = self.lifecycle.stop_current()
+                    return stopped
 
-            try:
-                start_result = self.strategy.on_start(context)
-                context = self._process_strategy_result(start_result, context)
-                for tick in self.data_source.ticks(instrument=task.instrument):
-                    if execution_control.pause_requested:
-                        paused = self._pause_current()
-                        return paused
-                    if execution_control.stop_requested:
-                        stopped = self._stop_current()
-                        return stopped
+                tick_result = self.strategy.on_tick(tick, context)
+                context = self.pipeline.process_result(tick_result, context)
 
-                    tick_result = self.strategy.on_tick(tick, context)
-                    context = self._process_strategy_result(tick_result, context)
-
-                context = self._process_strategy_result(self.strategy.on_stop(context), context)
-                stopped = self._stop_current()
-                return stopped
-            except Exception as exc:
-                failed = self._fail_current(str(exc))
-                return failed
-        finally:
-            self.event_bus.unsubscribe(subscription)
+            context = self.pipeline.process_result(self.strategy.on_stop(context), context)
+            stopped = self.lifecycle.stop_current()
+            return stopped
+        except Exception as exc:
+            failed = self.lifecycle.fail_current(str(exc))
+            return failed

@@ -7,16 +7,15 @@ from dataclasses import dataclass
 from threading import RLock
 from typing import Protocol
 
-from core import Event
+from core import Event, EventSource, EventType, Metadata
 
 type EventPredicate = Callable[[Event], bool]
-type EventHandlerResult = object
 
 
 class EventHandler(Protocol):
     """Handler boundary for server-side event processing."""
 
-    def handle(self, event: Event) -> EventHandlerResult | None:
+    def handle(self, event: Event) -> None:
         """Process one event."""
 
 
@@ -25,7 +24,9 @@ class EventPublication:
     """Result of publishing one event to matching handlers."""
 
     event: Event
-    results: tuple[EventHandlerResult, ...]
+    delivered_count: int
+    failed_count: int = 0
+    failure_events: tuple[Event, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,12 +88,25 @@ class EventBus:
                 subscription for subscription in self._subscriptions if subscription.matches(event)
             )
 
-        results: list[EventHandlerResult] = []
+        delivered_count = 0
+        failure_events: list[Event] = []
         for subscription in subscriptions:
-            result = subscription.handler.handle(event)
-            if result is not None:
-                results.append(result)
-        return EventPublication(event=event, results=tuple(results))
+            try:
+                subscription.handler.handle(event)
+            except Exception as exc:
+                failure_event = self._handler_failure_event(event, subscription.handler, exc)
+                failure_events.append(failure_event)
+                with self._lock:
+                    self._history.append(failure_event)
+            else:
+                delivered_count += 1
+
+        return EventPublication(
+            event=event,
+            delivered_count=delivered_count,
+            failed_count=len(failure_events),
+            failure_events=tuple(failure_events),
+        )
 
     def publish_many(self, events: Iterable[Event]) -> tuple[EventPublication, ...]:
         """Publish events in order."""
@@ -135,3 +149,24 @@ class EventBus:
             return predicate(event) if predicate is not None else True
 
         return matches
+
+    @staticmethod
+    def _handler_failure_event(
+        event: Event,
+        handler: EventHandler,
+        exc: Exception,
+    ) -> Event:
+        handler_type = f"{handler.__class__.__module__}.{handler.__class__.__qualname__}"
+        return Event(
+            type=EventType.ERROR_OCCURRED,
+            task_id=event.task_id,
+            source=EventSource.SERVER,
+            metadata=Metadata.of(
+                original_event_id=str(event.id),
+                original_event_type=event.type.value,
+                original_event_source=event.source.value,
+                handler_type=handler_type,
+                exception_type=exc.__class__.__name__,
+                exception_message=str(exc),
+            ),
+        )
