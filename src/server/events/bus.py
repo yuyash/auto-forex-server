@@ -6,8 +6,17 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from threading import RLock
 from typing import Protocol
+from uuid import UUID
 
-from core import Event, EventSource, EventType, Metadata
+from core import (
+    Event,
+    EventSource,
+    EventType,
+    Metadata,
+    StrategyEvent,
+    StrategyEventRequest,
+    StrategyExecutionResponse,
+)
 
 type EventPredicate = Callable[[Event], bool]
 
@@ -50,6 +59,7 @@ class EventBus:
             for handler in handlers
         ]
         self._history: list[Event] = []
+        self._strategy_requests: dict[UUID, StrategyEventRequest] = {}
         self._lock = RLock()
 
     def subscribe(
@@ -82,6 +92,23 @@ class EventBus:
 
     def publish(self, event: Event) -> EventPublication:
         """Publish one event to all handlers."""
+        events = self._events_to_publish(event)
+        delivered_count = 0
+        failure_events: list[Event] = []
+        for published_event in events:
+            publication = self._publish_one(published_event)
+            delivered_count += publication.delivered_count
+            failure_events.extend(publication.failure_events)
+
+        return EventPublication(
+            event=event,
+            delivered_count=delivered_count,
+            failed_count=len(failure_events),
+            failure_events=tuple(failure_events),
+        )
+
+    def _publish_one(self, event: Event) -> EventPublication:
+        """Publish a concrete event without deriving aggregate events."""
         with self._lock:
             self._history.append(event)
             subscriptions = tuple(
@@ -108,9 +135,36 @@ class EventBus:
             failure_events=tuple(failure_events),
         )
 
+    def _events_to_publish(self, event: Event) -> tuple[Event, ...]:
+        if isinstance(event, StrategyEventRequest):
+            if event.requires_broker:
+                with self._lock:
+                    self._strategy_requests[event.id] = event
+                return (event,)
+            return (event, StrategyEvent(request=event))
+
+        if isinstance(event, StrategyExecutionResponse):
+            request = self._strategy_request_for(event)
+            return (event, StrategyEvent(request=request, response=event))
+
+        return (event,)
+
+    def _strategy_request_for(
+        self,
+        response: StrategyExecutionResponse,
+    ) -> StrategyEventRequest:
+        with self._lock:
+            return self._strategy_requests.pop(response.event.id, response.event)
+
     def publish_many(self, events: Iterable[Event]) -> tuple[EventPublication, ...]:
         """Publish events in order."""
         return tuple(self.publish(event) for event in events)
+
+    @property
+    def pending_strategy_requests(self) -> Sequence[StrategyEventRequest]:
+        """Return strategy requests waiting for an execution response."""
+        with self._lock:
+            return tuple(self._strategy_requests.values())
 
     @property
     def history(self) -> Sequence[Event]:

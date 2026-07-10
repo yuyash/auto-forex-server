@@ -21,7 +21,7 @@ from core import (
     Metadata,
     Strategy,
     StrategyContext,
-    StrategyEvent,
+    StrategyEventRequest,
     StrategyResult,
     SystemClock,
     TaskAction,
@@ -189,10 +189,10 @@ class StrategyExecutionPipeline:
 
     @staticmethod
     def _events_with_timestamp(
-        events: tuple[StrategyEvent, ...],
+        events: tuple[StrategyEventRequest, ...],
         *,
         timestamp: datetime | None,
-    ) -> tuple[StrategyEvent, ...]:
+    ) -> tuple[StrategyEventRequest, ...]:
         if timestamp is None:
             return events
         return tuple(event.evolve(timestamp=timestamp) for event in events)

@@ -8,7 +8,7 @@ from core import (
     Metadata,
     Order,
     OrderSide,
-    StrategyEvent,
+    StrategyEventRequest,
     TradeSide,
 )
 
@@ -16,14 +16,14 @@ from core import (
 class OrderFactory:
     """Create orders at the Server orchestration boundary."""
 
-    def open_position_order(
+    def open_trade_order(
         self,
         *,
-        event: StrategyEvent,
+        event: StrategyEventRequest,
         side: TradeSide,
         units: Decimal,
     ) -> Order:
-        """Create a broker-neutral order for an open-position strategy event."""
+        """Create a broker-neutral order for an open-trade strategy event."""
         return Order(
             instrument=event.instrument,
             side=self._order_side(side),

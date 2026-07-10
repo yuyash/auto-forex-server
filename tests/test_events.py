@@ -1,6 +1,24 @@
 from __future__ import annotations
 
-from core import Event, EventSource, EventType
+from decimal import Decimal
+
+from core import (
+    CurrencyPair,
+    Event,
+    EventSource,
+    EventType,
+    Metadata,
+    Money,
+    Order,
+    OrderSide,
+    OrderStatus,
+    StrategyAction,
+    StrategyEvent,
+    StrategyEventRequest,
+    StrategyExecutionResponse,
+    TradeSide,
+    new_uuid,
+)
 
 from server.events import EventBus, RecordingEventHandler
 
@@ -36,3 +54,45 @@ class TestEvents:
         assert failure_event.metadata["original_event_type"] == EventType.TASK_STARTED.value
         assert failure_event.metadata["exception_type"] == "RuntimeError"
         assert failure_event.metadata["exception_message"] == "handler failed"
+
+    def test_event_bus_records_aggregated_strategy_event_from_request_and_response(
+        self,
+    ) -> None:
+        recording_handler = RecordingEventHandler()
+        event_bus = EventBus(handlers=[recording_handler])
+        request = StrategyEventRequest(
+            task_id=new_uuid(),
+            action=StrategyAction.CLOSE_TRADE,
+            instrument=CurrencyPair.of("USD_JPY"),
+            side=TradeSide.SELL,
+            units=Decimal("1000"),
+            price=Money.of("150.50", "JPY"),
+            metadata=Metadata.of(
+                close_reason="take_profit",
+                planned_take_profit_price="150.50 JPY",
+            ),
+        )
+        response = StrategyExecutionResponse(
+            event=request,
+            order=Order(
+                instrument=CurrencyPair.of("USD_JPY"),
+                side=OrderSide.SELL,
+                units=Decimal("1000"),
+                price=Money.of("150.52", "JPY"),
+                status=OrderStatus.FILLED,
+                filled_units=Decimal("1000"),
+            ),
+        )
+
+        event_bus.publish(request)
+        assert event_bus.pending_strategy_requests == (request,)
+
+        event_bus.publish(response)
+
+        aggregate = event_bus.select(event_class=StrategyEvent)[0]
+        assert event_bus.pending_strategy_requests == ()
+        assert recording_handler.events == [request, response, aggregate]
+        assert aggregate.request is request
+        assert aggregate.response is response
+        assert aggregate.metadata["planned_take_profit_price"] == "150.50 JPY"
+        assert aggregate.metadata["filled_take_profit_price"] == "150.52 JPY"

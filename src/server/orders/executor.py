@@ -13,8 +13,8 @@ from core import (
     Position,
     PositionSide,
     StrategyAction,
-    StrategyEvent,
-    StrategyExecutionReport,
+    StrategyEventRequest,
+    StrategyExecutionResponse,
     TradeSide,
 )
 
@@ -37,80 +37,83 @@ class StrategyEventExecutor:
 
     def execute_many(
         self,
-        events: Sequence[StrategyEvent],
-    ) -> tuple[StrategyExecutionReport, ...]:
+        events: Sequence[StrategyEventRequest],
+    ) -> tuple[StrategyExecutionResponse, ...]:
         """Execute events in order and return broker reports."""
-        reports: list[StrategyExecutionReport] = []
+        reports: list[StrategyExecutionResponse] = []
         for event in events:
-            reports.extend(self.execute(event))
+            try:
+                reports.extend(self.execute(event))
+            except Exception as exc:
+                reports.append(self._execution_exception_response(event, exc))
         return tuple(reports)
 
-    def execute(self, event: StrategyEvent) -> tuple[StrategyExecutionReport, ...]:
+    def execute(self, event: StrategyEventRequest) -> tuple[StrategyExecutionResponse, ...]:
         """Execute one strategy event."""
         if event.action == StrategyAction.HOLD:
             return ()
-        if event.action == StrategyAction.OPEN_POSITION:
-            return (self._open_position(event),)
-        if event.action == StrategyAction.CLOSE_POSITION:
-            return self._close_positions(event)
+        if event.action == StrategyAction.OPEN_TRADE:
+            return (self._open_trade(event),)
+        if event.action == StrategyAction.CLOSE_TRADE:
+            return self._close_trades(event)
         return (
-            StrategyExecutionReport(
+            StrategyExecutionResponse(
                 event=event,
                 execution_error=f"unsupported strategy event: {event.action.value}",
             ),
         )
 
-    def _open_position(self, event: StrategyEvent) -> StrategyExecutionReport:
+    def _open_trade(self, event: StrategyEventRequest) -> StrategyExecutionResponse:
         side = event.side
         units = event.units
         if side is None or units is None:
-            return StrategyExecutionReport(
+            return StrategyExecutionResponse(
                 event=event,
-                execution_error="open-position event requires side and units",
+                execution_error="open-trade event requires side and units",
             )
-        order = self.order_factory.open_position_order(
+        order = self.order_factory.open_trade_order(
             event=event,
             side=side,
             units=units,
         )
         if self.dry_run:
-            return StrategyExecutionReport(
+            return StrategyExecutionResponse(
                 event=event,
                 order=self._filled_dry_run_order(order),
             )
         if self.broker is None:
-            return StrategyExecutionReport(
+            return StrategyExecutionResponse(
                 event=event,
                 execution_error="broker is required when dry_run is false",
             )
-        return StrategyExecutionReport(
+        return StrategyExecutionResponse(
             event=event,
             order=self.broker.place_order(order),
         )
 
-    def _close_positions(
+    def _close_trades(
         self,
-        event: StrategyEvent,
-    ) -> tuple[StrategyExecutionReport, ...]:
+        event: StrategyEventRequest,
+    ) -> tuple[StrategyExecutionResponse, ...]:
         side = event.side
         units = event.units
         if side is None:
             return (
-                StrategyExecutionReport(
+                StrategyExecutionResponse(
                     event=event,
-                    execution_error="close-position event requires side",
+                    execution_error="close-trade event requires side",
                 ),
             )
         if self.dry_run:
             if units is None:
                 return (
-                    StrategyExecutionReport(
+                    StrategyExecutionResponse(
                         event=event,
-                        execution_error="dry-run close-position event requires units",
+                        execution_error="dry-run close-trade event requires units",
                     ),
                 )
             return (
-                StrategyExecutionReport(
+                StrategyExecutionResponse(
                     event=event,
                     order=self._filled_dry_run_order(
                         Order(
@@ -131,26 +134,35 @@ class StrategyEventExecutor:
             )
         if self.broker is None:
             return (
-                StrategyExecutionReport(
+                StrategyExecutionResponse(
                     event=event,
                     execution_error="broker is required when dry_run is false",
                 ),
             )
-        reports: list[StrategyExecutionReport] = []
-        for position, position_side in self._matching_position_sides(event):
+        reports: list[StrategyExecutionResponse] = []
+        try:
+            matching_position_sides = self._matching_position_sides(event)
+        except Exception as exc:
+            return (self._execution_exception_response(event, exc),)
+        for position, position_side in matching_position_sides:
+            try:
+                order = self.broker.close_position(
+                    position=position,
+                    side=position_side,
+                    units=units,
+                )
+            except Exception as exc:
+                reports.append(self._execution_exception_response(event, exc))
+                continue
             reports.append(
-                StrategyExecutionReport(
+                StrategyExecutionResponse(
                     event=event,
-                    order=self.broker.close_position(
-                        position=position,
-                        side=position_side,
-                        units=units,
-                    ),
+                    order=order,
                 )
             )
         if not reports:
             reports.append(
-                StrategyExecutionReport(
+                StrategyExecutionResponse(
                     event=event,
                     execution_error="no matching broker position found",
                 )
@@ -159,7 +171,7 @@ class StrategyEventExecutor:
 
     def _matching_position_sides(
         self,
-        event: StrategyEvent,
+        event: StrategyEventRequest,
     ) -> tuple[tuple[Position, PositionSide], ...]:
         if self.broker is None:
             return ()
@@ -179,6 +191,16 @@ class StrategyEventExecutor:
             status=OrderStatus.FILLED,
             filled_units=order.units,
             average_fill_price=order.price,
+        )
+
+    @staticmethod
+    def _execution_exception_response(
+        event: StrategyEventRequest,
+        exc: Exception,
+    ) -> StrategyExecutionResponse:
+        return StrategyExecutionResponse(
+            event=event,
+            execution_error=f"{exc.__class__.__name__}: {exc}",
         )
 
     @staticmethod

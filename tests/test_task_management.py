@@ -25,7 +25,8 @@ from core import (
     StrategyDecisionCode,
     StrategyDecisionReason,
     StrategyEvent,
-    StrategyExecutionReport,
+    StrategyEventRequest,
+    StrategyExecutionResponse,
     StrategyResult,
     TaskStatus,
     Tick,
@@ -75,9 +76,9 @@ class OpeningStrategy(Strategy):
     def on_tick(self, tick: Tick, context: StrategyContext) -> StrategyResult:
         return StrategyResult(
             events=(
-                StrategyEvent(
+                StrategyEventRequest(
                     task_id=context.task_id,
-                    action=StrategyAction.OPEN_POSITION,
+                    action=StrategyAction.OPEN_TRADE,
                     instrument=tick.instrument,
                     side=TradeSide.BUY,
                     units=Decimal("1000"),
@@ -135,6 +136,13 @@ class MemoryBroker(Broker):
         return ()
 
 
+class FailingBroker(MemoryBroker):
+    def place_order(self, order: Order) -> Order:
+        _ = order
+        msg = "broker did not return an order"
+        raise RuntimeError(msg)
+
+
 class TestTaskManagement:
     def test_backtest_manager_runs_ticks_and_handles_broker_events(self) -> None:
         tick = Tick(
@@ -173,17 +181,53 @@ class TestTaskManagement:
         assert broker.orders[0].id.value.version == 7
         assert any(event.type == EventType.TASK_COMPLETED for event in event_bus.history)
         strategy_event = event_bus.select(event_class=StrategyEvent)[0]
-        report_event = event_bus.select(event_class=StrategyExecutionReport)[0]
+        report_event = event_bus.select(event_class=StrategyExecutionResponse)[0]
         completed_event = next(
             event for event in event_bus.history if event.type == EventType.TASK_COMPLETED
         )
         assert isinstance(strategy_event, StrategyEvent)
-        assert isinstance(report_event, StrategyExecutionReport)
+        assert isinstance(report_event, StrategyExecutionResponse)
         assert strategy_event.timestamp == tick.timestamp
-        assert strategy_event.action == StrategyAction.OPEN_POSITION
+        assert strategy_event.action == StrategyAction.OPEN_TRADE
         assert report_event.type == EventType.ORDER_FILLED
-        assert report_event.event is strategy_event
+        assert strategy_event.request is report_event.event
+        assert strategy_event.response is report_event
         assert completed_event.timestamp == definition.end_at
+
+    def test_backtest_manager_records_broker_exceptions_as_execution_responses(
+        self,
+    ) -> None:
+        tick = Tick(
+            instrument=USD_JPY,
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            bid=Money.of("150.10", "JPY"),
+            ask=Money.of("150.12", "JPY"),
+        )
+        definition = BacktestTaskDefinition(
+            name="Backtest USD_JPY",
+            instrument=USD_JPY,
+            start_at=datetime(2026, 1, 1, tzinfo=UTC),
+            end_at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+        event_bus = EventBus()
+        manager = TaskManager(event_bus=event_bus, max_workers=1)
+
+        started = manager.start_backtest(
+            definition,
+            data_source=MemoryDataSource([tick]),
+            strategy=OpeningStrategy(name="opening"),
+            broker=FailingBroker(),
+        )
+        finished = manager.wait(started.id, timeout=2)
+        manager.shutdown()
+
+        report_event = event_bus.select(event_class=StrategyExecutionResponse)[0]
+        strategy_event = event_bus.select(event_class=StrategyEvent)[0]
+        assert finished.status == TaskStatus.COMPLETED
+        assert report_event.execution_error == "RuntimeError: broker did not return an order"
+        assert strategy_event.request is report_event.event
+        assert strategy_event.response is report_event
+        assert event_bus.pending_strategy_requests == ()
 
     def test_backtest_manager_restarts_completed_task(self) -> None:
         tick = Tick(
@@ -298,8 +342,8 @@ class TestTaskManagement:
 
         assert finished.status == TaskStatus.STOPPED
         assert broker.orders == []
-        report_event = event_bus.select(event_class=StrategyExecutionReport)[0]
-        assert isinstance(report_event, StrategyExecutionReport)
+        report_event = event_bus.select(event_class=StrategyExecutionResponse)[0]
+        assert isinstance(report_event, StrategyExecutionResponse)
         assert report_event.order is not None
         assert report_event.order.status == OrderStatus.FILLED
 
