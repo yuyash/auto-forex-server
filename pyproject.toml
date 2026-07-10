@@ -40,5 +40,5 @@ quote-style = "double"
 python-version = "3.14"
 
 [tool.uv.sources]
-auto-forex-core = { path = "../core" }
-oanda = { path = "../oanda" }
+auto-forex-core = { path = "../core", editable = true }
+oanda = { path = "../oanda", editable = true }
