@@ -163,7 +163,7 @@ class TestTaskManagement:
         event_bus = EventBus()
         manager = TaskManager(event_bus=event_bus, max_workers=1)
 
-        started = manager.start_backtest(
+        run = manager.start_backtest(
             definition,
             data_source=MemoryDataSource([tick]),
             strategy=OpeningStrategy(
@@ -171,11 +171,11 @@ class TestTaskManagement:
             ),
             broker=broker,
         )
-        finished = manager.wait(started.id, timeout=2)
+        finished = run.wait(timeout=2)
         manager.shutdown()
 
-        assert started.status == TaskStatus.RUNNING
-        assert started.started_at == definition.start_at
+        assert run.task.status == TaskStatus.RUNNING
+        assert run.task.started_at == definition.start_at
         assert finished.status == TaskStatus.COMPLETED
         assert finished.completed_at == definition.end_at
         assert finished.run_count == 1
@@ -214,13 +214,13 @@ class TestTaskManagement:
         event_bus = EventBus()
         manager = TaskManager(event_bus=event_bus, max_workers=1)
 
-        started = manager.start_backtest(
+        run = manager.start_backtest(
             definition,
             data_source=MemoryDataSource([tick]),
             strategy=OpeningStrategy(name="opening"),
             broker=FailingBroker(),
         )
-        finished = manager.wait(started.id, timeout=2)
+        finished = run.wait(timeout=2)
         manager.shutdown()
 
         report_event = event_bus.select(event_class=StrategyExecutionResponse)[0]
@@ -246,21 +246,21 @@ class TestTaskManagement:
         )
         manager = TaskManager(max_workers=1)
 
-        started = manager.start_backtest(
+        run = manager.start_backtest(
             definition,
             data_source=MemoryDataSource([tick]),
             strategy=HoldStrategy(
                 name="hold",
             ),
         )
-        first_finished = manager.wait(started.id, timeout=2)
-        restarted = manager.restart(started.id, timeout=2)
-        second_finished = manager.wait(started.id, timeout=2)
+        first_finished = run.wait(timeout=2)
+        restarted = run.restart(timeout=2)
+        second_finished = restarted.wait(timeout=2)
         manager.shutdown()
 
         assert first_finished.status == TaskStatus.COMPLETED
-        assert restarted.status == TaskStatus.RUNNING
-        assert restarted.started_at == definition.start_at
+        assert restarted.task.status == TaskStatus.RUNNING
+        assert restarted.task.started_at == definition.start_at
         assert second_finished.status == TaskStatus.COMPLETED
         assert second_finished.completed_at == definition.end_at
         assert second_finished.run_count == 2
@@ -280,7 +280,7 @@ class TestTaskManagement:
         )
         manager = TaskManager(max_workers=1)
 
-        started = manager.start_trading(
+        run = manager.start_trading(
             definition,
             data_source=MemoryDataSource([tick], repeat=True, delay_seconds=0.01),
             strategy=HoldStrategy(
@@ -288,8 +288,8 @@ class TestTaskManagement:
             ),
         )
         sleep(0.03)
-        stopped = manager.stop(started.id)
-        finished = manager.wait(started.id, timeout=2)
+        stopped = run.stop()
+        finished = run.wait(timeout=2)
         manager.shutdown()
 
         assert stopped.status == TaskStatus.STOPPED
@@ -310,14 +310,14 @@ class TestTaskManagement:
         )
 
         with TaskManager(max_workers=1) as manager:
-            started = manager.start_trading(
+            run = manager.start_trading(
                 definition,
                 data_source=MemoryDataSource([tick], repeat=True, delay_seconds=0.01),
                 strategy=HoldStrategy(name="hold"),
             )
             sleep(0.03)
 
-        assert manager.get(started.id).status == TaskStatus.STOPPED
+        assert manager.get(run.id).status == TaskStatus.STOPPED
 
     def test_trading_dry_run_does_not_call_broker_even_when_broker_is_configured(self) -> None:
         tick = Tick(
@@ -336,13 +336,13 @@ class TestTaskManagement:
         event_bus = EventBus()
         manager = TaskManager(event_bus=event_bus, max_workers=1)
 
-        started = manager.start_trading(
+        run = manager.start_trading(
             definition,
             data_source=MemoryDataSource([tick]),
             strategy=OpeningStrategy(name="opening"),
             broker=broker,
         )
-        finished = manager.wait(started.id, timeout=2)
+        finished = run.wait(timeout=2)
         manager.shutdown()
 
         assert finished.status == TaskStatus.STOPPED
