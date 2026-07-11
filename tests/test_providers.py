@@ -16,7 +16,6 @@ from pydantic import SecretStr
 from server.providers import (
     ProviderFactory,
     ProviderName,
-    create_provider,
 )
 
 
@@ -24,7 +23,7 @@ class TestProviders:
     def test_create_oanda_provider_from_provider_enum(self) -> None:
         settings = OandaSettings(account_id="001-001-1234567-001", access_token=SecretStr("token"))
 
-        provider = create_provider(ProviderName.OANDA, settings=settings)
+        provider = ProviderFactory().create(ProviderName.OANDA, settings=settings)
         account_manager = cast(OandaAccountManager, provider.account_manager)
         broker = cast(OandaBroker, provider.broker)
         data_source = cast(OandaDataSource, provider.data)

@@ -32,12 +32,3 @@ class ProviderFactory:
 
     def _create_oanda_provider(self, settings: OandaSettings) -> TradingProvider:
         return OandaProvider.from_settings(settings)
-
-
-def create_provider(
-    provider: ProviderName,
-    *,
-    settings: OandaSettings,
-) -> TradingProvider:
-    """Create provider-specific service implementations."""
-    return ProviderFactory().create(provider, settings=settings)
