@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from core import (
     CurrencyPair,
     Event,
@@ -32,7 +34,7 @@ class RaisingEventHandler:
 class TestEvents:
     def test_event_bus_records_handler_failures_as_error_events(self) -> None:
         recording_handler = RecordingEventHandler()
-        event_bus = EventBus()
+        event_bus = EventBus(record_history=True)
         event_bus.subscribe(RaisingEventHandler())
         event_bus.subscribe(recording_handler)
         event = Event(type=EventType.TASK_STARTED, source=EventSource.CORE)
@@ -58,8 +60,9 @@ class TestEvents:
         self,
     ) -> None:
         recording_handler = RecordingEventHandler()
-        event_bus = EventBus(handlers=[recording_handler])
+        event_bus = EventBus(handlers=[recording_handler], record_history=True)
         request = StrategyEventRequest(
+            timestamp=datetime(2026, 1, 1, tzinfo=UTC),
             task_id=new_uuid(),
             action=StrategyAction.CLOSE_TRADE,
             instrument=CurrencyPair.of("USD_JPY"),

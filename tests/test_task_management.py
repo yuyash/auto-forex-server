@@ -79,6 +79,7 @@ class OpeningStrategy(Strategy):
         return StrategyResult(
             events=(
                 StrategyEventRequest(
+                    timestamp=tick.timestamp,
                     task_id=context.task_id,
                     action=StrategyAction.OPEN_TRADE,
                     instrument=tick.instrument,
@@ -160,7 +161,7 @@ class TestTaskManagement:
             end_at=datetime(2026, 1, 2, tzinfo=UTC),
         )
         broker = MemoryBroker()
-        event_bus = EventBus()
+        event_bus = EventBus(record_history=True)
         manager = TaskManager(event_bus=event_bus, max_workers=1)
 
         run = manager.start_backtest(
@@ -211,7 +212,7 @@ class TestTaskManagement:
             start_at=datetime(2026, 1, 1, tzinfo=UTC),
             end_at=datetime(2026, 1, 2, tzinfo=UTC),
         )
-        event_bus = EventBus()
+        event_bus = EventBus(record_history=True)
         manager = TaskManager(event_bus=event_bus, max_workers=1)
 
         run = manager.start_backtest(
@@ -333,7 +334,7 @@ class TestTaskManagement:
             dry_run=True,
         )
         broker = MemoryBroker()
-        event_bus = EventBus()
+        event_bus = EventBus(record_history=True)
         manager = TaskManager(event_bus=event_bus, max_workers=1)
 
         run = manager.start_trading(
