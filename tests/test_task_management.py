@@ -33,6 +33,7 @@ from core import (
     TaskManager,
     TaskStatus,
     Tick,
+    Trade,
     TradeSide,
     TradingTaskDefinition,
     Units,
@@ -137,6 +138,22 @@ class MemoryBroker(Broker):
     def positions(self, *, instrument: CurrencyPair | None = None) -> Sequence[Position]:
         _ = instrument
         return ()
+
+    def trades(self, *, instrument: CurrencyPair | None = None) -> Sequence[Trade]:
+        _ = instrument
+        return ()
+
+    def close_trade(self, trade: Trade, *, units: Units | None = None) -> Order:
+        amount = units or trade.units
+        return Order(
+            status=OrderStatus.FILLED,
+            broker_order_id=BrokerOrderId.of("close-trade-order-1"),
+            instrument=trade.instrument,
+            side=OrderSide.SELL if trade.side == PositionSide.LONG else OrderSide.BUY,
+            units=amount,
+            filled_units=amount,
+            average_fill_price=trade.price,
+        )
 
 
 class FailingBroker(MemoryBroker):

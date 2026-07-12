@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from core import (
     CurrencyPair,
     Event,
     EventBus,
+    EventHandlerError,
     EventSource,
     EventType,
     Metadata,
@@ -39,15 +41,14 @@ class TestEvents:
         event_bus.subscribe(recording_handler)
         event = Event(type=EventType.TASK_STARTED, source=EventSource.CORE)
 
-        publication = event_bus.publish(event)
+        with pytest.raises(EventHandlerError) as raised:
+            event_bus.publish(event)
 
-        assert publication.delivered_count == 1
-        assert publication.failed_count == 1
-        assert len(publication.failure_events) == 1
         assert event_bus.history[0] == event
-        assert recording_handler.events == [event]
+        assert recording_handler.events == []
 
-        failure_event = publication.failure_events[0]
+        failure_event = event_bus.history[1]
+        assert isinstance(raised.value.cause, RuntimeError)
         assert failure_event in event_bus.history
         assert failure_event.type == EventType.ERROR_OCCURRED
         assert failure_event.source == EventSource.CORE
